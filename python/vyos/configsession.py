@@ -88,6 +88,7 @@ RENEW = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'renew']
 POWEROFF = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'poweroff']
 OP_CMD_ADD = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'add']
 OP_CMD_DELETE = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'delete']
+PING = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'ping']
 TRACEROUTE = [
     '/usr/libexec/vyos/op_mode/mtr_execute.py',
     'mtr',
@@ -209,30 +210,10 @@ class ConfigSession(object):
                 self, self.finalize_vyconf, self._vyconf_session
             )
 
-    def __del__(self):
-        if self.shared:
-            return
-        if not vyconf_backend():
-            try:
-                output = (
-                    subprocess.check_output(
-                        [CLI_SHELL_API, 'teardownSession'], env=self.__session_env
-                    )
-                    .decode()
-                    .strip()
-                )
-                if output:
-                    print(
-                        'cli-shell-api teardownSession output for session {0}: {1}'.format(
-                            self.__session_id, output
-                        ),
-                        file=sys.stderr,
-                    )
-            except Exception as e:
-                print(
-                    'Could not tear down session {0}: {1}'.format(self.__session_id, e),
-                    file=sys.stderr,
-                )
+        if not self.shared and not self._vyconf_session:
+            self._finalizer = weakref.finalize(
+                self, self.finalize_legacy, self.__session_env.copy()
+            )
 
     @classmethod
     def finalize_vyconf(cls, session: VyconfSession):
@@ -241,6 +222,31 @@ class ConfigSession(object):
             session.discard()
         session.exit_config_mode()
         session.teardown()
+
+    @classmethod
+    def finalize_legacy(cls, session_env):
+        try:
+            output = (
+                subprocess.check_output(
+                    [CLI_SHELL_API, 'teardownSession'], env=session_env
+                )
+                .decode()
+                .strip()
+            )
+            if output:
+                print(
+                    'cli-shell-api teardownSession output for session {0}: {1}'.format(
+                        session_env['SESSION_PID'], output
+                    ),
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(
+                'Could not tear down session {0}: {1}'.format(
+                    session_env['SESSION_PID'], e
+                ),
+                file=sys.stderr,
+            )
 
     def __run_command(self, cmd_list):
         p = subprocess.Popen(
@@ -481,6 +487,16 @@ class ConfigSession(object):
         out = self.__run_command(SHOW + ['container', 'image'])
         return out
 
-    def traceroute(self, host):
-        out = self.__run_command(TRACEROUTE + [host])
+    def ping(self, host, count: int = 5, vrf: str | None = None):
+        cmd = PING + [host, 'count', str(count)]
+        if vrf is not None:
+            cmd += ['vrf', vrf]
+        out = self.__run_command(cmd)
+        return out
+
+    def traceroute(self, host, vrf: str | None = None):
+        cmd = TRACEROUTE + [host]
+        if vrf is not None:
+            cmd += ['--vrf', vrf]
+        out = self.__run_command(cmd)
         return out
